@@ -6,11 +6,16 @@ unit dnSplitter;
 ****************************************************************
   Author    : Zverev Nikolay (www.delphinotes.ru)
   Created   : 16.10.2007
-  Modified  : 21.09.2015
-  Version   : 1.09
+  Modified  : 16.10.2015
+  Version   : 1.10
 ****************************************************************
 
   History:
+    ~1.10 16.10.2015
+      * Изменён алгоритм определения цвета кнопки при наведении мыши
+      * Оптимизация отрисовки в методе DrawArrow
+      ! CMDialogKey заменён на CMChildKey (иначе VK_ESCAPE может не дойти до контрола)
+
     ~1.09 21.09.2015
       * Метод UpdateControlSize обрамлён сообщением WM_SETREDRAW для плавного изменения размеров компонент,
         окружающих сплиттер
@@ -64,6 +69,7 @@ uses
   Winapi.Windows,
   Winapi.Messages,
   System.SysUtils,
+  System.Types,
   System.Classes,
   Vcl.Graphics,
   Vcl.Controls,
@@ -72,7 +78,6 @@ uses
 {.$define USE_RS_UPDATE_DELAY}
 
 const
-  DEF_BUTTON_HIGHLIGHT_COLOR = $00FFCFCF;
   MAX_SPLITTER_SIZE = 36;
   {$ifdef USE_RS_UPDATE_DELAY}
   RS_UPDATE_DELAY = 250;
@@ -154,7 +159,6 @@ type
     FButtonWidth: Integer;
     FIsHighlighted: Boolean;
     FButtonVisible: Boolean;
-    FAutoHighlightColor: Boolean;
     FButtonColors: array [0..4] of TColor;
     FButtonRect: TRect;
 
@@ -175,6 +179,8 @@ type
     {/action}
     function GetAlign: TAlign;
     procedure SetAlign(Value: TAlign);
+    function GetAutoHighlightColor: Boolean;
+    procedure SetAutoHighlightColor(AValue: Boolean);
     function GetDefaultCursor: TCursor;
     procedure SetAlignControl(AControl: TControl);
     procedure SetAllowDrag(Value: Boolean);
@@ -189,17 +195,14 @@ type
     procedure SetButtonAlign(const Value: TdnButtonAlign);
     procedure SetButtonPosition(const Value: Integer);
     procedure SetButtonWidthType(const Value: TdnButtonWidthType);
-    procedure SetButtonWidth(const Value: integer);
+    procedure SetButtonWidth(const Value: Integer);
 
     function GetButtonColor(Index: Integer): TColor;
     procedure SetButtonColor(Index: Integer; const Value: TColor);
 
-    procedure SetAutoHighLightColor(const Value: boolean);
-    function GrabBarColor: TColor;
-
     function GetButtonRect: TRect;
 
-    procedure CMDialogKey(var Message: TCMDialogKey); message CM_DIALOGKEY;
+    procedure CMChildKey(var Message: TCMChildKey); message CM_CHILDKEY;
     procedure CMEnabledChanged(var Message: TMessage); message CM_ENABLEDCHANGED;
     procedure CMHintShow(var Message: TMessage); message CM_HINTSHOW;
     procedure CMMouseEnter(var Msg: TWMMouse); message CM_MOUSEENTER;
@@ -212,19 +215,16 @@ type
     procedure CheckHighlighted(Highlighted: Boolean); overload;
 
     procedure PaintButton;
-    function DrawArrow(ACanvas: TCanvas; AvailableRect: TRect; AOffset: integer;
-       ArrowSize: integer; Color: TColor): integer;
+    function DrawArrow(ACanvas: TCanvas; ARect: TRect; AOffset: Integer; ArrowSize: Integer; AColor: TColor): Integer;
   public
     procedure CancelDrag;
     property ButtonRect: TRect read FButtonRect;
     property Draging: Boolean read FDraging;
   protected
     function CanResize(var NewSize: Integer): Boolean; reintroduce; virtual;
-    procedure MouseDown(Button: TMouseButton; Shift: TShiftState;
-      X, Y: Integer); override;
+    procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); override;
     procedure MouseMove(Shift: TShiftState; X, Y: Integer); override;
-    procedure MouseUp(Button: TMouseButton; Shift: TShiftState;
-      X, Y: Integer); override;
+    procedure MouseUp(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); override;
     procedure RequestAlign; override;
     procedure Paint; override;
     procedure StopSizing; dynamic;
@@ -251,8 +251,7 @@ type
     property Constraints;
     property MinSize: NaturalNumber read FMinSize write FMinSize default 30;
     property ParentColor;
-    property ResizeStyle: TResizeStyle read FResizeStyle write FResizeStyle
-      default rsUpdate;
+    property ResizeStyle: TResizeStyle read FResizeStyle write FResizeStyle default rsUpdate;
     property Visible;
     property Width stored False;
     property Height stored False;
@@ -262,6 +261,7 @@ type
 
     property Align read GetAlign write SetAlign stored IsAlignStored;
     property AlignControl: TControl read FAlignControl write SetAlignControl;
+    property AutoHighlightColor: Boolean read GetAutoHighlightColor write SetAutoHighlightColor stored False;
     property IsSnapped: Boolean read FSnapped write SetSnapped stored IsSnappedStored default False;
     property ButtonCursor: TCursor read FButtonCursor write FButtonCursor default crHandPoint;
     property ButtonVisible: Boolean read FButtonVisible write SetButtonVisible default True;
@@ -270,12 +270,11 @@ type
     property ButtonWidthType: TdnButtonWidthType read FButtonWidthType write SetButtonWidthType default btwPixels;
     property ButtonWidth: integer read FButtonWidth write SetButtonWidth default 100;
 
-    property AutoHighlightColor: Boolean read FAutoHighlightColor write SetAutoHighlightColor default False;
-    property ArrowColor: TColor           index 0 read GetButtonColor write SetButtonColor default clNavy;
-    property ButtonColor: TColor          index 1 read GetButtonColor write SetButtonColor default clBtnFace;
-    property ButtonHighlightColor: TColor index 2 read GetButtonColor write SetButtonColor default DEF_BUTTON_HIGHLIGHT_COLOR;
-    property TextureColor1: TColor        index 3 read GetButtonColor write SetButtonColor default clBtnHighlight;//clWhite;
-    property TextureColor2: TColor        index 4 read GetButtonColor write SetButtonColor default clBtnShadow;//clNavy;
+    property ArrowColor: TColor index 0 read GetButtonColor write SetButtonColor default clHighlight;
+    property ButtonColor: TColor index 1 read GetButtonColor write SetButtonColor default clBtnFace;
+    property ButtonHighlightColor: TColor index 2 read GetButtonColor write SetButtonColor default clDefault;
+    property TextureColor1: TColor index 3 read GetButtonColor write SetButtonColor default clBtnHighlight;
+    property TextureColor2: TColor index 4 read GetButtonColor write SetButtonColor default clBtnShadow;
 
     property AllowDrag: Boolean read FAllowDrag write SetAllowDrag default True;
     property OnSnap: TNotifyEvent read FOnSnap write FOnSnap stored IsOnSnapStored;
@@ -289,15 +288,98 @@ procedure Register;
 implementation
 
 uses
-  Vcl.Forms,
-  Vcl.ActnList;
+  System.Math,
+  Vcl.ActnList,
+  Vcl.Forms;
 
 procedure Register;
 begin
   RegisterComponents('Delphi Notes.RU', [TdnSplitter]);
 end;
 
-{ TdnSplitterActionLink }
+{ Misc }
+
+type
+  TArrowDirection = (adLeft, adRight, adUp, adDown);
+
+function AlignToDirection(AAlign: TAlign; AInvert: Boolean): TArrowDirection; inline;
+begin
+  case AAlign of
+    alLeft:
+      if AInvert then
+        Result := adRight
+      else
+        Result := adLeft;
+    alRight:
+      if AInvert then
+        Result := adLeft
+      else
+        Result := adRight;
+    alTop:
+      if AInvert then
+        Result := adDown
+      else
+        Result := adUp;
+  else //alBottom and other
+    if AInvert then
+      Result := adUp
+    else
+      Result := adDown;
+  end;
+end;
+
+procedure DoDrawArrow(ACanvas: TCanvas; AColor: TColor; const ARect: TRect; ADirection: TArrowDirection);
+  function CenterX(const ARect: TRect): Integer; inline;
+  begin
+    Result := ARect.Left + (ARect.Right - ARect.Left) div 2;
+  end;
+
+  function CenterY(const ARect: TRect): Integer; inline;
+  begin
+    Result := ARect.Top + (ARect.Bottom - ARect.Top) div 2;
+  end;
+begin
+  if AColor = clNone then
+    Exit;
+  ACanvas.Pen.Color := AColor;
+  ACanvas.Brush.Color := AColor;
+  case ADirection of
+    adLeft:
+      ACanvas.Polygon([Point(ARect.Right, ARect.Top), Point(ARect.Right, ARect.Bottom),
+        Point(ARect.Left, CenterY(ARect))]);
+    adRight:
+      ACanvas.Polygon([Point(ARect.Left, ARect.Top), Point(ARect.Left, ARect.Bottom),
+        Point(ARect.Right, CenterY(ARect))]);
+    adUp:
+      ACanvas.Polygon([Point(ARect.Left, ARect.Bottom), Point(ARect.Right, ARect.Bottom),
+        Point(CenterX(ARect), ARect.Top)]);
+    adDown:
+      ACanvas.Polygon([Point(ARect.Left, ARect.Top), Point(ARect.Right, ARect.Top),
+        Point(CenterX(ARect), ARect.Bottom)]);
+  else
+    Assert(False);
+  end;
+end;
+
+function CalcButtonHighlightColor: TColor;
+  function CalcValue(C1, C2: Byte): Byte; inline;
+  begin
+    Result := (C1 * 20 + C2 * 80 + 50) div 100;
+  end;
+var
+  C1, C2: TColor;
+begin
+  C1 := GetSysColor(clHighlight and $FF);
+  C2 := GetSysColor(clHighlightText and $FF);
+
+  Result := RGB(
+    CalcValue(GetRValue(C1), GetRValue(C2)),
+    CalcValue(GetGValue(C1), GetGValue(C2)),
+    CalcValue(GetBValue(C1), GetBValue(C2))
+  );
+end;
+
+{ TswSplitterActionLink }
 
 destructor TdnSplitterActionLink.Destroy;
 begin
@@ -391,9 +473,9 @@ begin
   FSavedSize := -1;
   FButtonWidth := 100;
   FButtonVisible := True;
-  FButtonColors[0] := clNavy;
+  FButtonColors[0] := clHighlight;
   FButtonColors[1] := clBtnFace;
-  FButtonColors[2] := DEF_BUTTON_HIGHLIGHT_COLOR;
+  FButtonColors[2] := clDefault;
   FButtonColors[3] := clBtnHighlight;
   FButtonColors[4] := clBtnShadow;
 
@@ -904,6 +986,17 @@ begin
   end;
 end;
 
+function TdnSplitter.GetAutoHighlightColor: Boolean;
+begin
+  Result := ButtonHighlightColor = clDefault;
+end;
+
+procedure TdnSplitter.SetAutoHighlightColor(AValue: Boolean);
+begin
+  if AValue then
+    ButtonHighlightColor := clDefault;
+end;
+
 function TdnSplitter.GetDefaultCursor: TCursor;
 begin
   if not AllowDrag then
@@ -1120,21 +1213,30 @@ begin
 end;
 
 procedure TdnSplitter.PaintButton;
+  function GetButtonColor: TColor;
+  begin
+    if FIsHighlighted then
+    begin
+      Result := ButtonHighlightColor;
+      if Result = clDefault then
+        Result := CalcButtonHighlightColor;
+    end else
+      Result := ButtonColor;
+  end;
+
 const
   TEXTURE_SIZE = 3;
 var
   BtnRect: TRect;
-  BW: integer;
+  BW: Integer;
   TextureBmp: TBitmap;
-  x, y: integer;
-  RW, RH: integer;
+  x, y: Integer;
+  RW, RH: Integer;
   OffscreenBmp: TBitmap;
+  BkColor: TColor;
 begin
   if (not FButtonVisible) or (not Enabled) then
     Exit;
-
-  if FAutoHighLightColor then
-    ButtonHighlightColor := GrabBarColor;
 
   BtnRect := GetButtonRect;
   if IsRectEmpty(BtnRect) then
@@ -1162,10 +1264,8 @@ begin
       Inc(BtnRect.Left);
       Inc(BtnRect.Top);
 
-      if FIsHighlighted then
-        OffscreenBmp.Canvas.Brush.Color := ButtonHighlightColor
-      else
-        OffscreenBmp.Canvas.Brush.Color := ButtonColor;
+      BkColor := GetButtonColor;
+      OffscreenBmp.Canvas.Brush.Color := BkColor;
       OffscreenBmp.Canvas.FillRect(BtnRect);
 
       Dec(BtnRect.Right);
@@ -1181,13 +1281,13 @@ begin
           BW := BtnRect.Right - BtnRect.Left;
           DrawArrow(OffscreenBmp.Canvas, BtnRect, 1, BW, ArrowColor);
           BW := DrawArrow(OffscreenBmp.Canvas, BtnRect, -1, BW, ArrowColor);
-          InflateRect(BtnRect, 0, -(BW+4));
+          InflateRect(BtnRect, 0, -(BW + 4));
         end else begin
           InflateRect(BtnRect, -4, 0);
           BW := BtnRect.Bottom - BtnRect.Top;
           DrawArrow(OffscreenBmp.Canvas, BtnRect, 1, BW, ArrowColor);
           BW := DrawArrow(OffscreenBmp.Canvas, BtnRect, -1, BW, ArrowColor);
-          InflateRect(BtnRect, -(BW+4), 0);
+          InflateRect(BtnRect, -(BW + 4), 0);
         end;
 
         // Draw the texture
@@ -1208,10 +1308,12 @@ begin
               Width := RW;
               Height := RH;
               // Draw first square
-              Canvas.Brush.Color := OffscreenBmp.Canvas.Brush.Color;
+              Canvas.Brush.Color := BkColor;
               Canvas.FillRect(Rect(0, 0, RW+1, RH+1));
-              Canvas.Pixels[1,1] := TextureColor1;
-              Canvas.Pixels[2,2] := TextureColor2;
+              if TextureColor1 <> clNone then
+                Canvas.Pixels[1,1] := TextureColor1;
+              if TextureColor2 <> clNone then
+                Canvas.Pixels[2,2] := TextureColor2;
 
               // Tile first square all the way across
               for x := 1 to ((RW div TEXTURE_SIZE) + ord(RW mod TEXTURE_SIZE > 0)) do
@@ -1247,97 +1349,47 @@ begin
   end;
 end;
 
-function TdnSplitter.DrawArrow(ACanvas: TCanvas; AvailableRect: TRect; AOffset: integer;
-   ArrowSize: integer; Color: TColor): integer;
+function TdnSplitter.DrawArrow(ACanvas: TCanvas; ARect: TRect; AOffset: Integer;
+   ArrowSize: Integer; AColor: TColor): Integer;
 var
-  x, y, q, i, j: integer;
-  ArrowAlign: TAlign;
-begin
-  // STB Nitro drivers have a LineTo bug, so I've opted to use the slower
-  // SetPixel method to draw the arrows.
+  LArrowDirection: TArrowDirection;
+  LArrowRect: TRect;
 
-  if not Odd(ArrowSize) then
-    Dec(ArrowSize);
-  if ArrowSize < 1 then
-    ArrowSize := 1;
+  procedure DoCalcArrowRect;
+  begin
+    case LArrowDirection of
+      adLeft, adRight:
+        begin
+          LArrowRect.Left := ARect.Left + (ARect.Right - ARect.Left - ArrowSize) div 2 + 1;
+          LArrowRect.Right := LArrowRect.Left + ArrowSize - 1;
 
-  if FSnapped then
-  begin
-    case Align of
-      alLeft:   ArrowAlign := alRight;
-      alRight:  ArrowAlign := alLeft;
-      alTop:    ArrowAlign := alBottom;
-    else //alBottom
-      ArrowAlign := alTop;
-    end;
-  end else
-    ArrowAlign := Align;
-  q := ArrowSize * 2 - 1 ;
-  Result := q;
-  ACanvas.Pen.Color := Color;
-  with AvailableRect do
-  begin
-    case ArrowAlign of
-      alLeft:
-        begin
-          x := Left + ((Right - Left - ArrowSize) div 2) + 1;
           if AOffset < 0 then
-            y := Bottom + AOffset - q
+            LArrowRect.Top := ARect.Bottom + AOffset - Result
           else
-            y := Top + AOffset;
-          for j := x + ArrowSize - 1 downto x do
-          begin
-            for i := y to y + q - 1 do
-              ACanvas.Pixels[j, i] := Color;
-            inc(y);
-            dec(q,2);
-          end;
+            LArrowRect.Top := ARect.Top + AOffset;
+          LArrowRect.Bottom := LArrowRect.Top + Result - 1;
         end;
-      alRight:
-        begin
-          x := Left + ((Right - Left - ArrowSize) div 2) + 1;
-          if AOffset < 0 then
-            y := Bottom + AOffset - q
-          else
-            y := Top + AOffset;
-          for j := x to x + ArrowSize - 1 do
-          begin
-            for i := y to y + q - 1 do
-              ACanvas.Pixels[j, i] := Color;
-            inc(y);
-            dec(q,2);
-          end;
-        end;
-      alTop:
-        begin
-          if AOffset < 0 then
-            x := Right + AOffset - q
-          else
-            x := Left + AOffset;
-          y := Top + ((Bottom - Top - ArrowSize) div 2) + 1;
-          for i := y + ArrowSize - 1 downto y do
-          begin
-            for j := x to x + q - 1 do
-              ACanvas.Pixels[j, i] := Color;
-            inc(x);
-            dec(q,2);
-          end;
-        end;
-    else // alBottom
+    else
       if AOffset < 0 then
-        x := Right + AOffset - q
+        LArrowRect.Left := ARect.Right + AOffset - Result
       else
-        x := Left + AOffset;
-      y := Top + ((Bottom - Top - ArrowSize) div 2) + 1;
-      for i := y to y + ArrowSize - 1 do
-      begin
-        for j := x to x + q - 1 do
-          ACanvas.Pixels[j, i] := Color;
-        inc(x);
-        dec(q,2);
-      end;
+        LArrowRect.Left := ARect.Left + AOffset;
+      LArrowRect.Right := LArrowRect.Left + Result - 1;
+
+      LArrowRect.Top := ARect.Top + (ARect.Bottom - ARect.Top - ArrowSize) div 2 + 1;
+      LArrowRect.Bottom := LArrowRect.Top + ArrowSize - 1;
     end;
   end;
+
+begin
+  if not Odd(ArrowSize) then
+    Dec(ArrowSize);
+  ArrowSize := Min(Max(1, ArrowSize), ButtonWidth div 5);
+  Result := ArrowSize * 2 - 1;
+
+  LArrowDirection := AlignToDirection(Align, FSnapped);
+  DoCalcArrowRect;
+  DoDrawArrow(ACanvas, AColor, LArrowRect, LArrowDirection);
 end;
 
 procedure TdnSplitter.SetButtonVisible(const Value: boolean);
@@ -1413,49 +1465,6 @@ begin
   end;
 end;
 
-procedure TdnSplitter.SetAutoHighlightColor(const Value: boolean);
-begin
-  if FAutoHighLightColor <> Value then
-  begin
-    FAutoHighLightColor := Value;
-    if FAutoHighLightColor then
-      ButtonHighLightColor := GrabBarColor
-    else
-      ButtonHighLightColor := DEF_BUTTON_HIGHLIGHT_COLOR;
-  end;
-end;
-
-function TdnSplitter.GrabBarColor: TColor;
-var
-  BeginRGB: array[0..2] of Byte;
-  RGBDifference: array[0..2] of integer;
-  R,G,B: Byte;
-  BeginColor,
-  EndColor: TColor;
-  NumberOfColors: integer;
-
-begin
-  //Need to figure out how many colors available at runtime
-  NumberOfColors := 256;
-
-  BeginColor := clActiveCaption;
-  EndColor := clBtnFace;
-
-  BeginRGB[0] := GetRValue(ColorToRGB(BeginColor));
-  BeginRGB[1] := GetGValue(ColorToRGB(BeginColor));
-  BeginRGB[2] := GetBValue(ColorToRGB(BeginColor));
-
-  RGBDifference[0] := GetRValue(ColorToRGB(EndColor)) - BeginRGB[0];
-  RGBDifference[1] := GetGValue(ColorToRGB(EndColor)) - BeginRGB[1];
-  RGBDifference[2] := GetBValue(ColorToRGB(EndColor)) - BeginRGB[2];
-
-  R := BeginRGB[0] + MulDiv (180, RGBDifference[0], NumberOfColors - 1);
-  G := BeginRGB[1] + MulDiv (180, RGBDifference[1], NumberOfColors - 1);
-  B := BeginRGB[2] + MulDiv (180, RGBDifference[2], NumberOfColors - 1);
-
-  Result := RGB (R, G, B);
-end;
-
 function TdnSplitter.GetButtonRect: TRect;
 var
   BW, BP: Integer;
@@ -1510,7 +1519,7 @@ begin
   Result := FButtonRect;
 end;
 
-procedure TdnSplitter.CMDialogKey(var Message: TCMDialogKey);
+procedure TdnSplitter.CMChildKey(var Message: TCMChildKey);
 begin
   if FDraging and (Message.CharCode = VK_ESCAPE) then
   begin
