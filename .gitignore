@@ -4,3 +4,4 @@ __history
 *.identcache
 *.local
 Win32
+*.dcu

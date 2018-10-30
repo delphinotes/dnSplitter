@@ -65,6 +65,9 @@ unit dnSplitter;
 
 interface
 
+{$i jedi.inc}
+
+{$ifdef HAS_UNITSCOPE}
 uses
   Winapi.Windows,
   Winapi.Messages,
@@ -74,6 +77,17 @@ uses
   Vcl.Graphics,
   Vcl.Controls,
   Vcl.ExtCtrls;
+{$else}
+uses
+  Windows,
+  Messages,
+  SysUtils,
+  Types,
+  Classes,
+  Graphics,
+  Controls,
+  ExtCtrls;
+{$endif}
 
 {.$define USE_RS_UPDATE_DELAY}
 
@@ -287,10 +301,17 @@ procedure Register;
 
 implementation
 
+{$ifdef HAS_UNITSCOPE}
 uses
   System.Math,
   Vcl.ActnList,
   Vcl.Forms;
+{$else}
+uses
+  Math,
+  ActnList,
+  Forms;
+{$endif}
 
 procedure Register;
 begin
@@ -302,7 +323,7 @@ end;
 type
   TArrowDirection = (adLeft, adRight, adUp, adDown);
 
-function AlignToDirection(AAlign: TAlign; AInvert: Boolean): TArrowDirection; inline;
+function AlignToDirection(AAlign: TAlign; AInvert: Boolean): TArrowDirection; {$ifdef SUPPORTS_INLINE}inline;{$endif}
 begin
   case AAlign of
     alLeft:
@@ -329,12 +350,12 @@ begin
 end;
 
 procedure DoDrawArrow(ACanvas: TCanvas; AColor: TColor; const ARect: TRect; ADirection: TArrowDirection);
-  function CenterX(const ARect: TRect): Integer; inline;
+  function CenterX(const ARect: TRect): Integer; {$ifdef SUPPORTS_INLINE}inline;{$endif}
   begin
     Result := ARect.Left + (ARect.Right - ARect.Left) div 2;
   end;
 
-  function CenterY(const ARect: TRect): Integer; inline;
+  function CenterY(const ARect: TRect): Integer; {$ifdef SUPPORTS_INLINE}inline;{$endif}
   begin
     Result := ARect.Top + (ARect.Bottom - ARect.Top) div 2;
   end;
@@ -362,7 +383,7 @@ begin
 end;
 
 function CalcButtonHighlightColor: TColor;
-  function CalcValue(C1, C2: Byte): Byte; inline;
+  function CalcValue(C1, C2: Byte): Byte; {$ifdef SUPPORTS_INLINE}inline;{$endif}
   begin
     Result := (C1 * 20 + C2 * 80 + 50) div 100;
   end;
@@ -1577,4 +1598,5 @@ begin
 end;
 
 end.
+
 
