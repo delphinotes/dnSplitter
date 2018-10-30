@@ -5,3 +5,4 @@ __history
 *.local
 Win32
 *.dcu
+*.stat

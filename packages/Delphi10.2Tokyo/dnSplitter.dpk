@@ -27,7 +27,7 @@ package dnSplitter;
 {$DEFINE RELEASE}
 {$ENDIF IMPLICITBUILDING}
 {$DESCRIPTION 'delphinotes.ru - TdnSplitter'}
-{$LIBSUFFIX '210'}
+{$LIBSUFFIX '250'}
 {$IMPLICITBUILD ON}
 
 requires
