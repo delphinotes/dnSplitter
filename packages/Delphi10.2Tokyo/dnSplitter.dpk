@@ -28,7 +28,7 @@ package dnSplitter;
 {$ENDIF IMPLICITBUILDING}
 {$DESCRIPTION 'delphinotes.ru - TdnSplitter'}
 {$LIBSUFFIX '250'}
-{$IMPLICITBUILD ON}
+{$IMPLICITBUILD OFF}
 
 requires
   rtl,

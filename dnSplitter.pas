@@ -473,9 +473,6 @@ end;
 
 { TdnSplitter }
 
-type
-  TWinControlAccess = class(TWinControl);
-
 constructor TdnSplitter.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
