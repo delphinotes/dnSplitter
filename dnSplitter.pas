@@ -6,11 +6,20 @@ unit dnSplitter;
 ****************************************************************
   Author    : Zverev Nikolay (www.delphinotes.ru)
   Created   : 16.10.2007
-  Modified  : 16.10.2015
-  Version   : 1.10
+  Modified  : 04.11.2018
+  Version   : 1.11
 ****************************************************************
 
   History:
+    ~1.11 04.11.2018
+      + Добавлена поддержка VCL стилей
+      + Добавлена поддержка старых версий Delphi
+      * UpdateControlSize вызывает WM_SETREDRAW только если:
+        а) Parent не является окном верхнего уровня (иначе есть вероятность "провалиться" сквозь окно,
+           а так же наблюдаются глюки прорисовки в Delphi7 при dpi > 96)
+        б) включено свойство Parent.DoubleBuffered (при выключенном DoubleBuffered эффект не заметен)
+      ! Исправлена проблема поиска AlignControl при первом "кидании" компонента на форму в дизайнере
+
     ~1.10 16.10.2015
       * Изменён алгоритм определения цвета кнопки при наведении мыши
       * Оптимизация отрисовки в методе DrawArrow
@@ -25,7 +34,7 @@ unit dnSplitter;
       * Обработка клавиши VK_ESCAPE перенесена в событие CM_DIALOGKEY
       - Убрана ссылка на ActiveControl, которая осталась в наследство от
         стандартного TSplitter, и которая использовалась для подмены обработчика
-        OnKeyDown активного элемента управления (эта логика иногда приводила к 
+        OnKeyDown активного элемента управления (эта логика иногда приводила к
         ошибке Stack Overflow)
       ! В методе DrawArrow параметр Offset переименован в AOffset (для
         совместимости с Delphi XE2)
@@ -67,6 +76,11 @@ interface
 
 {$i jedi.inc}
 
+{$ifdef DELPHI2010_UP}
+  {$define HAS_GESTURES}
+  {$define HAS_MARGINS}
+{$endif}
+
 {$ifdef HAS_UNITSCOPE}
 uses
   Winapi.Windows,
@@ -76,6 +90,9 @@ uses
   System.Classes,
   Vcl.Graphics,
   Vcl.Controls,
+  {$ifdef HAS_UNIT_VCL_THEMES}
+  Vcl.Themes,
+  {$endif}
   Vcl.ExtCtrls;
 {$else}
 uses
@@ -223,6 +240,7 @@ type
     procedure CMMouseLeave(var Msg: TWMMouse); message CM_MOUSELEAVE;
     procedure WMEraseBkgnd(var Message: TWmEraseBkgnd); message WM_ERASEBKGND;
   protected
+    procedure SetParent(AParent: TWinControl); override;
     procedure Notification(AComponent: TComponent; Operation: TOperation); override;
     procedure DoSnap; dynamic;
     procedure CheckHighlighted(MousePos: TPoint); overload;
@@ -476,6 +494,11 @@ end;
 constructor TdnSplitter.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
+
+  ControlStyle := ControlStyle + [csOpaque]
+    {$ifdef HAS_GESTURES} - [csGestures]{$endif}
+  ;
+
   FAutoSnap := True;
 
   FSize := 8;
@@ -484,8 +507,6 @@ begin
   FMinSize := 30;
   FResizeStyle := rsUpdate;
   FOldSize := -1;
-
-  ControlStyle := ControlStyle + [csOpaque];
 
   FButtonCursor := crHandPoint;
   FSavedSize := -1;
@@ -500,12 +521,6 @@ begin
   FAllowDrag := True;
   FButtonAlign := baCenter;
   FButtonWidthType := btwPixels;
-
-  if csDesigning in ComponentState then
-  begin
-    inherited Align := alLeft;
-    UpdateWidth;
-  end;
 end;
 
 destructor TdnSplitter.Destroy;
@@ -523,7 +538,13 @@ begin
     if FBrush = nil then
     begin
       FBrush := TBrush.Create;
-      FBrush.Bitmap := AllocPatternBitmap(clBlack, clWhite);
+      {$ifdef HAS_UNIT_VCL_THEMES}
+      if TStyleManager.IsCustomStyleActive then
+        with StyleServices do
+          FBrush.Bitmap := AllocPatternBitmap(clBlack, GetStyleColor(scSplitter))
+      else
+      {$endif}
+        FBrush.Bitmap := AllocPatternBitmap(clBlack, clWhite);
     end;
     FPrevBrush := SelectObject(FLineDC, FBrush.Handle);
   end;
@@ -562,20 +583,50 @@ var
 begin
   Result := nil;
   P := Point(Left, Top);
+  {$ifdef HAS_MARGINS}
+  if AlignWithMargins then
   case Align of
-    alLeft: Dec(P.X);
-    alRight: Inc(P.X, Width);
-    alTop: Dec(P.Y);
-    alBottom: Inc(P.Y, Height);
+    alLeft:
+      Dec(P.X, Margins.Left + 1);
+    alRight:
+      Inc(P.X, Width + Margins.Right + 1);
+    alTop:
+      Dec(P.Y, Margins.Top + 1);
+    alBottom:
+      Inc(P.Y, Height + Margins.Bottom + 1);
+  else
+    Exit;
+  end else
+  {$endif}
+  case Align of
+    alLeft:
+      Dec(P.X);
+    alRight:
+      Inc(P.X, Width);
+    alTop:
+      Dec(P.Y);
+    alBottom:
+      Inc(P.Y, Height);
   else
     Exit;
   end;
   for I := 0 to Parent.ControlCount - 1 do
   begin
     Result := Parent.Controls[I];
-    if Result.Visible and Result.Enabled then
+    if Result.Visible and Result.Enabled and
+      (Result.Align in [alLeft, alRight, alTop, alBottom]) and
+     ((Result.Align in [alLeft, alRight]) = (Align in [alLeft, alRight])) then
     begin
       R := Result.BoundsRect;
+      {$ifdef HAS_MARGINS}
+      if Result.AlignWithMargins then
+      begin
+        Inc(R.Right, Result.Margins.Right);
+        Dec(R.Left, Result.Margins.Left);
+        Inc(R.Bottom, Result.Margins.Bottom);
+        Dec(R.Top, Result.Margins.Top);
+      end;
+      {$endif}
       if (R.Right - R.Left) = 0 then
         if Align in [alTop, alLeft] then
           Dec(R.Left)
@@ -609,22 +660,33 @@ const
   XorColor = $00FFD8CE;
 var
   R: TRect;
-  Edges: TBevelEdges;
-  FrameBrush: HBRUSH;
 begin
   FPainting := True;
 
   R := ClientRect;
+  {$ifdef HAS_UNIT_VCL_THEMES}
+  if TStyleManager.IsCustomStyleActive then
+    Canvas.Brush.Color := StyleServices.GetSystemColor(clBtnFace)
+  else
+  {$endif}
+    Canvas.Brush.Color := Color;
+  Canvas.FillRect(ClientRect);
+
   if Beveled then
   begin
-    if Align in [alLeft, alRight]
-      then Edges := [beLeft, beRight]
-      else Edges := [beTop, beBottom];
-    DrawEdge(Canvas.Handle, R, BDR_RAISEDOUTER, BF_ADJUST	or BF_FLAT or Byte((@Edges)^));
+    if Align in [alLeft, alRight] then
+      InflateRect(R, 0, 1)
+    else
+      InflateRect(R, 1, 0);
+
+    {$ifdef HAS_UNIT_VCL_THEMES}
+    if TStyleManager.IsCustomStyleActive then
+      Canvas.Brush.Color := StyleServices.GetSystemColor(clBtnShadow)
+    else
+    {$endif}
+      Canvas.Brush.Color := clBtnShadow;
+    Canvas.FrameRect(R);
   end;
-  FrameBrush := CreateSolidBrush(ColorToRGB(Color));
-  FillRect(Canvas.Handle, R, FrameBrush);
-  DeleteObject(FrameBrush);
 
   if (csDesigning in ComponentState) and (not Beveled) then
     // Draw outline:
@@ -715,13 +777,15 @@ var
 begin
   if FNewSize <> FOldSize then
   begin
-    LLockPaint := Parent.HandleAllocated and Parent.Visible;
+    LLockPaint := Parent.DoubleBuffered and Parent.Visible and Assigned(Parent.Parent) and Parent.HandleAllocated;
     if LLockPaint then
       SendMessage(Parent.Handle, WM_SETREDRAW, 0, 0);
     try
       case Align of
-        alLeft: FAlignControl.Width := FNewSize;
-        alTop: FAlignControl.Height := FNewSize;
+        alLeft:
+          FAlignControl.Width := FNewSize;
+        alTop:
+          FAlignControl.Height := FNewSize;
         alRight:
           begin
             Parent.DisableAlign;
@@ -753,7 +817,9 @@ begin
       begin
         SendMessage(Parent.Handle, WM_SETREDRAW, 1, 0);
         RedrawWindow(Parent.Handle, nil, 0, RDW_INVALIDATE or RDW_UPDATENOW or RDW_ALLCHILDREN);
-      end;
+      end else
+      if Parent.HandleAllocated then
+        Parent.Repaint;
     end;
   end;
 end;
@@ -768,10 +834,14 @@ begin
     Split := Y - FDownPos.Y;
   S := 0;
   case Align of
-    alLeft: S := FAlignControl.Width + Split;
-    alRight: S := FAlignControl.Width - Split;
-    alTop: S := FAlignControl.Height + Split;
-    alBottom: S := FAlignControl.Height - Split;
+    alLeft:
+      S := FAlignControl.Width + Split;
+    alRight:
+      S := FAlignControl.Width - Split;
+    alTop:
+      S := FAlignControl.Height + Split;
+    alBottom:
+      S := FAlignControl.Height - Split;
   end;
   NewSize := S;
 
@@ -947,6 +1017,19 @@ begin
   // если у него нету своего обработчика
   if Action = Self.Action then
     Result := True;
+end;
+
+procedure TdnSplitter.SetParent(AParent: TWinControl);
+begin
+  inherited SetParent(AParent);
+
+  if Assigned(AParent) and (csDesigning in ComponentState) and not (csLoading in ComponentState) then
+  begin
+    // обрабатываем момент, когда компонент впервые "кидается" на форму в дизайнере
+    inherited Align := alLeft;
+    AlignControl := FindControl;
+    UpdateWidth;
+  end;
 end;
 
 procedure TdnSplitter.Notification(AComponent: TComponent; Operation: TOperation);
@@ -1231,17 +1314,6 @@ begin
 end;
 
 procedure TdnSplitter.PaintButton;
-  function GetButtonColor: TColor;
-  begin
-    if FIsHighlighted then
-    begin
-      Result := ButtonHighlightColor;
-      if Result = clDefault then
-        Result := CalcButtonHighlightColor;
-    end else
-      Result := ButtonColor;
-  end;
-
 const
   TEXTURE_SIZE = 3;
 var
@@ -1251,7 +1323,12 @@ var
   x, y: Integer;
   RW, RH: Integer;
   OffscreenBmp: TBitmap;
-  BkColor: TColor;
+  LBkColor: TColor;
+  LFrameColor1: TColor;
+  LFrameColor2: TColor;
+  LArrowColor: TColor;
+  LDotColor1: TColor;
+  LDotColor2: TColor;
 begin
   if (not FButtonVisible) or (not Enabled) then
     Exit;
@@ -1259,6 +1336,45 @@ begin
   BtnRect := GetButtonRect;
   if IsRectEmpty(BtnRect) then
     Exit; // nothing to draw
+
+  // Get Colors:
+  {$ifdef HAS_UNIT_VCL_THEMES}
+  if TStyleManager.IsCustomStyleActive then
+  begin
+    LFrameColor1 := StyleServices.GetSystemColor(clBtnShadow);
+    LFrameColor2 := StyleServices.GetSystemColor(clBtnHighlight);
+
+    if FIsHighlighted then
+    begin
+      LBkColor := StyleServices.GetSystemColor(clHighlight);
+      LArrowColor := StyleServices.GetSystemColor(clBtnFace);
+      LDotColor1 := StyleServices.GetSystemColor(clHighlight);
+      LDotColor2 := StyleServices.GetSystemColor(clBtnFace);
+    end else
+    begin
+      LBkColor := StyleServices.GetSystemColor(clBtnFace);
+      LArrowColor := StyleServices.GetSystemColor(clBtnShadow);
+      LDotColor1 := StyleServices.GetSystemColor(clBtnHighlight);
+      LDotColor2 := StyleServices.GetSystemColor(clBtnShadow);
+    end;
+  end else
+  {$endif}
+  begin
+    LFrameColor1 := clBtnShadow;
+    LFrameColor2 := clWindow;
+
+    if FIsHighlighted then
+    begin
+      LBkColor := ButtonHighlightColor;
+      if LBkColor = clDefault then
+        LBkColor := CalcButtonHighlightColor;
+    end else
+      LBkColor := ButtonColor;
+
+    LArrowColor := ArrowColor;
+    LDotColor1 := TextureColor1;
+    LDotColor2 := TextureColor2;
+  end;
 
   OffscreenBmp := TBitmap.Create;
   try
@@ -1268,22 +1384,21 @@ begin
 
     begin
       // Draw basic button
-      OffscreenBmp.Canvas.Brush.Color := clGray;
+      OffscreenBmp.Canvas.Brush.Color := LFrameColor1;
       OffscreenBmp.Canvas.FrameRect(BtnRect);
       InflateRect(BtnRect, -1, -1);
 
-      OffscreenBmp.Canvas.Pen.Color := clWhite;
+      OffscreenBmp.Canvas.Pen.Color := LFrameColor2;
       with BtnRect, OffscreenBmp.Canvas do
       begin
-        MoveTo(Left, Bottom-1);
+        MoveTo(Left, Bottom - 1);
         LineTo(Left, Top);
         LineTo(Right, Top);
       end;
       Inc(BtnRect.Left);
       Inc(BtnRect.Top);
 
-      BkColor := GetButtonColor;
-      OffscreenBmp.Canvas.Brush.Color := BkColor;
+      OffscreenBmp.Canvas.Brush.Color := LBkColor;
       OffscreenBmp.Canvas.FillRect(BtnRect);
 
       Dec(BtnRect.Right);
@@ -1297,14 +1412,14 @@ begin
         begin
           InflateRect(BtnRect, 0, -4);
           BW := BtnRect.Right - BtnRect.Left;
-          DrawArrow(OffscreenBmp.Canvas, BtnRect, 1, BW, ArrowColor);
-          BW := DrawArrow(OffscreenBmp.Canvas, BtnRect, -1, BW, ArrowColor);
+          DrawArrow(OffscreenBmp.Canvas, BtnRect, 1, BW, LArrowColor);
+          BW := DrawArrow(OffscreenBmp.Canvas, BtnRect, -1, BW, LArrowColor);
           InflateRect(BtnRect, 0, -(BW + 4));
         end else begin
           InflateRect(BtnRect, -4, 0);
           BW := BtnRect.Bottom - BtnRect.Top;
-          DrawArrow(OffscreenBmp.Canvas, BtnRect, 1, BW, ArrowColor);
-          BW := DrawArrow(OffscreenBmp.Canvas, BtnRect, -1, BW, ArrowColor);
+          DrawArrow(OffscreenBmp.Canvas, BtnRect, 1, BW, LArrowColor);
+          BW := DrawArrow(OffscreenBmp.Canvas, BtnRect, -1, BW, LArrowColor);
           InflateRect(BtnRect, -(BW + 4), 0);
         end;
 
@@ -1326,12 +1441,12 @@ begin
               Width := RW;
               Height := RH;
               // Draw first square
-              Canvas.Brush.Color := BkColor;
+              Canvas.Brush.Color := LBkColor;
               Canvas.FillRect(Rect(0, 0, RW+1, RH+1));
-              if TextureColor1 <> clNone then
-                Canvas.Pixels[1,1] := TextureColor1;
-              if TextureColor2 <> clNone then
-                Canvas.Pixels[2,2] := TextureColor2;
+              if LDotColor1 <> clNone then
+                Canvas.Pixels[1,1] := LDotColor1;
+              if LDotColor2 <> clNone then
+                Canvas.Pixels[2,2] := LDotColor2;
 
               // Tile first square all the way across
               for x := 1 to ((RW div TEXTURE_SIZE) + ord(RW mod TEXTURE_SIZE > 0)) do
@@ -1595,5 +1710,4 @@ begin
 end;
 
 end.
-
 
