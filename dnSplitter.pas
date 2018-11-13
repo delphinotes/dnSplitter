@@ -6,11 +6,22 @@ unit dnSplitter;
 ****************************************************************
   Author    : Zverev Nikolay (www.delphinotes.ru)
   Created   : 16.10.2007
-  Modified  : 04.11.2018
-  Version   : 1.11
+  Modified  : 06.11.2018
+  Version   : 1.12
 ****************************************************************
 
   History:
+    ~1.12 06.11.2018
+      ! “еперь в момент перемещени€ сплиттера учитываютс€ Margins и Padding контролов при подсчЄте допустимого
+        максимального размера
+      ! ¬ернул логику, котора€ определ€ет можно ли вызывать WM_SETREDRAW (в UpdateControlSize):
+          а) веро€тность "провалитьс€"
+             - слишком мала: стабильно воспроизводитс€ только при переключении IsSnapped (например по ShortCut'у
+               св€занного Action'а) и одноврменном клике мышкой;
+             - важность отсутстви€ мерцани€ в перерисовке ставлю выше такой веро€тности
+             - если такое поведение не допустимо - необходимо использовать дополнительный контейнер, например TPanel
+          б) глюки прорисовки при dpi > 96 исправл€ютс€ введением переменной FSkipMoveHandler, см. комментарии по коду
+
     ~1.11 04.11.2018
       + ƒобавлена поддержка VCL стилей
       + ƒобавлена поддержка старых версий Delphi
@@ -79,6 +90,11 @@ interface
 {$ifdef DELPHI2010_UP}
   {$define HAS_GESTURES}
   {$define HAS_MARGINS}
+  {$define HAS_PADDING}
+{$endif}
+
+{$ifdef DELPHIXE2_UP}
+  {$define HAS_PARENTDOUBLEBUFFERED}
 {$endif}
 
 {$ifdef HAS_UNITSCOPE}
@@ -160,6 +176,7 @@ type
     FOldSize: Integer;
     FPrevBrush: HBrush;
     FResizeStyle: TResizeStyle;
+    FSkipMoveHandler: Boolean;
     FSplit: Integer;
     FOnCanResize: TCanResizeEvent;
     FOnMoved: TNotifyEvent;
@@ -238,7 +255,7 @@ type
     procedure CMHintShow(var Message: TMessage); message CM_HINTSHOW;
     procedure CMMouseEnter(var Msg: TWMMouse); message CM_MOUSEENTER;
     procedure CMMouseLeave(var Msg: TWMMouse); message CM_MOUSELEAVE;
-    procedure WMEraseBkgnd(var Message: TWmEraseBkgnd); message WM_ERASEBKGND;
+    //procedure WMEraseBkgnd(var Message: TWmEraseBkgnd); message WM_ERASEBKGND;
   protected
     procedure SetParent(AParent: TWinControl); override;
     procedure Notification(AComponent: TComponent; Operation: TOperation); override;
@@ -248,10 +265,6 @@ type
 
     procedure PaintButton;
     function DrawArrow(ACanvas: TCanvas; ARect: TRect; AOffset: Integer; ArrowSize: Integer; AColor: TColor): Integer;
-  public
-    procedure CancelDrag;
-    property ButtonRect: TRect read FButtonRect;
-    property Draging: Boolean read FDraging;
   protected
     function CanResize(var NewSize: Integer): Boolean; reintroduce; virtual;
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); override;
@@ -260,59 +273,71 @@ type
     procedure RequestAlign; override;
     procedure Paint; override;
     procedure StopSizing; dynamic;
-
     {action}
     procedure ActionChange(Sender: TObject; CheckDefaults: Boolean); override;
     function GetActionLinkClass: TControlActionLinkClass; override;
     procedure Click; override;
     {/action}
   public
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
+    procedure CancelDrag;
     {action}
     function ExecuteAction(Action: TBasicAction): Boolean; override;
     {/action}
-    constructor Create(AOwner: TComponent); override;
-    destructor Destroy; override;
+    property ButtonRect: TRect read FButtonRect;
     property Canvas;
+    property Draging: Boolean read FDraging;
   published
+    {action}
     property Action;
-
+    {/action}
+    property Align read GetAlign write SetAlign stored IsAlignStored;
+    property AlignControl: TControl read FAlignControl write SetAlignControl;
+    property AllowDrag: Boolean read FAllowDrag write SetAllowDrag default True;
     property AutoSnap: Boolean read FAutoSnap write FAutoSnap default True;
     property Beveled: Boolean read FBeveled write SetBeveled default False;
     property Color;
     property Cursor stored IsCursorStored default crHSplit;
     property Constraints;
+    property ControlSize: Integer read GetControlSize write SetControlSize stored FSnapped;
+    {$ifdef HAS_PARENTDOUBLEBUFFERED}
+    property DoubleBuffered;
+    {$endif}
+    property Enabled;
+    property IsSnapped: Boolean read FSnapped write SetSnapped stored IsSnappedStored default False;
     property MinSize: NaturalNumber read FMinSize write FMinSize default 30;
+    property ParentBackground default True;
+    {$ifdef HAS_PARENTDOUBLEBUFFERED}
+    property ParentDoubleBuffered;
+    {$endif}
     property ParentColor;
+    property ParentShowHint;
+    property PopupMenu;
     property ResizeStyle: TResizeStyle read FResizeStyle write FResizeStyle default rsUpdate;
+    property ShowHint;
+    property Size: Integer read FSize write SetSize default 8;
     property Visible;
     property Width stored False;
     property Height stored False;
     property OnCanResize: TCanResizeEvent read FOnCanResize write FOnCanResize;
     property OnMoved: TNotifyEvent read FOnMoved write FOnMoved;
     property OnPaint: TNotifyEvent read FOnPaint write FOnPaint;
-
-    property Align read GetAlign write SetAlign stored IsAlignStored;
-    property AlignControl: TControl read FAlignControl write SetAlignControl;
-    property AutoHighlightColor: Boolean read GetAutoHighlightColor write SetAutoHighlightColor stored False;
-    property IsSnapped: Boolean read FSnapped write SetSnapped stored IsSnappedStored default False;
+    property OnSnap: TNotifyEvent read FOnSnap write FOnSnap stored IsOnSnapStored;
+    // Button:
     property ButtonCursor: TCursor read FButtonCursor write FButtonCursor default crHandPoint;
     property ButtonVisible: Boolean read FButtonVisible write SetButtonVisible default True;
     property ButtonAlign: TdnButtonAlign read FButtonAlign write SetButtonAlign default baCenter;
     property ButtonPosition: Integer read FButtonPosition write SetButtonPosition default 0;
     property ButtonWidthType: TdnButtonWidthType read FButtonWidthType write SetButtonWidthType default btwPixels;
     property ButtonWidth: integer read FButtonWidth write SetButtonWidth default 100;
-
+    // Colors:
+    property AutoHighlightColor: Boolean read GetAutoHighlightColor write SetAutoHighlightColor stored False;
     property ArrowColor: TColor index 0 read GetButtonColor write SetButtonColor default clHighlight;
     property ButtonColor: TColor index 1 read GetButtonColor write SetButtonColor default clBtnFace;
     property ButtonHighlightColor: TColor index 2 read GetButtonColor write SetButtonColor default clDefault;
     property TextureColor1: TColor index 3 read GetButtonColor write SetButtonColor default clBtnHighlight;
     property TextureColor2: TColor index 4 read GetButtonColor write SetButtonColor default clBtnShadow;
-
-    property AllowDrag: Boolean read FAllowDrag write SetAllowDrag default True;
-    property OnSnap: TNotifyEvent read FOnSnap write FOnSnap stored IsOnSnapStored;
-    property ControlSize: Integer read GetControlSize write SetControlSize stored FSnapped;
-    property Size: Integer read FSize write SetSize default 8;
-    property Enabled;
   end;
 
 procedure Register;
@@ -495,10 +520,9 @@ constructor TdnSplitter.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
 
-  ControlStyle := ControlStyle + [csOpaque]
+  ControlStyle := ControlStyle + [csOpaque, csParentBackground]
     {$ifdef HAS_GESTURES} - [csGestures]{$endif}
   ;
-
   FAutoSnap := True;
 
   FSize := 8;
@@ -525,7 +549,7 @@ end;
 
 destructor TdnSplitter.Destroy;
 begin
-  FBrush.Free;
+  FreeAndNil(FBrush);
   inherited Destroy;
 end;
 
@@ -557,7 +581,8 @@ begin
   FLineVisible := not FLineVisible;
   P := Point(Left, Top);
   if Align in [alLeft, alRight] then
-    P.X := Left + FSplit else
+    P.X := Left + FSplit
+  else
     P.Y := Top + FSplit;
   with P do
     PatBlt(FLineDC, X, Y, Width, Height, PATINVERT);
@@ -568,11 +593,7 @@ begin
   if FPrevBrush <> 0 then
     SelectObject(FLineDC, FPrevBrush);
   ReleaseDC(Parent.Handle, FLineDC);
-  if FBrush <> nil then
-  begin
-    FBrush.Free;
-    FBrush := nil;
-  end;
+  FreeAndNil(FBrush);
 end;
 
 function TdnSplitter.FindControl: TControl;
@@ -664,13 +685,20 @@ begin
   FPainting := True;
 
   R := ClientRect;
+
   {$ifdef HAS_UNIT_VCL_THEMES}
-  if TStyleManager.IsCustomStyleActive then
-    Canvas.Brush.Color := StyleServices.GetSystemColor(clBtnFace)
-  else
+  if not StyleServices.Enabled or not ParentBackground or not (seClient in StyleElements) then
+  begin
+    if TStyleManager.IsCustomStyleActive then
+      Canvas.Brush.Color := StyleServices.GetSystemColor(clBtnFace)
+    else
   {$endif}
-    Canvas.Brush.Color := Color;
-  Canvas.FillRect(ClientRect);
+      Canvas.Brush.Color := Color;
+
+    Canvas.FillRect(ClientRect);
+  {$ifdef HAS_UNIT_VCL_THEMES}
+  end;
+  {$endif}
 
   if Beveled then
   begin
@@ -718,6 +746,7 @@ procedure TdnSplitter.MouseDown(Button: TMouseButton; Shift: TShiftState;
   X, Y: Integer);
 var
   I: Integer;
+  C: TControl;
 begin
   inherited MouseDown(Button, Shift, X, Y);
 
@@ -747,20 +776,44 @@ begin
     FDraging := True;
     if Align in [alLeft, alRight] then
     begin
-      FMaxSize := Parent.ClientWidth - FMinSize;
+      FMaxSize := Parent.ClientWidth
+        {$ifdef HAS_PADDING}
+        - Parent.Padding.Left
+        - Parent.Padding.Right
+        {$endif}
+        - FMinSize
+      ;
       for I := 0 to Parent.ControlCount - 1 do
-        with Parent.Controls[I] do
-          if Visible and (Align in [alLeft, alRight]) then
-            Dec(FMaxSize, Width);
-      Inc(FMaxSize, FAlignControl.Width);
+      begin
+        C := Parent.Controls[I];
+        if (C <> FAlignControl) and C.Visible and (C.Align in [alLeft, alRight]) then
+          {$ifdef HAS_MARGINS}
+          if C.AlignWithMargins then
+            Dec(FMaxSize, C.Width + C.Margins.Left + C.Margins.Right)
+          else
+          {$endif}
+            Dec(FMaxSize, C.Width);
+      end;
     end else
     begin
-      FMaxSize := Parent.ClientHeight - FMinSize;
+      FMaxSize := Parent.ClientHeight
+        {$ifdef HAS_PADDING}
+        - Parent.Padding.Top
+        - Parent.Padding.Bottom
+        {$endif}
+        - FMinSize
+      ;
       for I := 0 to Parent.ControlCount - 1 do
-        with Parent.Controls[I] do
-          if Align in [alTop, alBottom] then
-            Dec(FMaxSize, Height);
-      Inc(FMaxSize, FAlignControl.Height);
+      begin
+        C := Parent.Controls[I];
+        if (C <> FAlignControl) and C.Visible and (C.Align in [alTop, alBottom]) then
+          {$ifdef HAS_MARGINS}
+          if C.AlignWithMargins then
+            Dec(FMaxSize, C.Height + C.Margins.Top + C.Margins.Bottom)
+          else
+          {$endif}
+            Dec(FMaxSize, C.Height);
+      end;
     end;
     UpdateSize(X, Y);
     AllocateLineDC;
@@ -777,7 +830,8 @@ var
 begin
   if FNewSize <> FOldSize then
   begin
-    LLockPaint := Parent.DoubleBuffered and Parent.Visible and Assigned(Parent.Parent) and Parent.HandleAllocated;
+    //LLockPaint := Parent.DoubleBuffered and Parent.Visible and Assigned(Parent.Parent) and Parent.HandleAllocated;
+    LLockPaint := Parent.Visible and Parent.HandleAllocated;
     if LLockPaint then
       SendMessage(Parent.Handle, WM_SETREDRAW, 0, 0);
     try
@@ -816,7 +870,8 @@ begin
       if LLockPaint then
       begin
         SendMessage(Parent.Handle, WM_SETREDRAW, 1, 0);
-        RedrawWindow(Parent.Handle, nil, 0, RDW_INVALIDATE or RDW_UPDATENOW or RDW_ALLCHILDREN);
+        RedrawWindow(Parent.Handle, nil, 0, RDW_INVALIDATE or RDW_ERASE or RDW_ALLCHILDREN or RDW_UPDATENOW or RDW_FRAME);
+        FSkipMoveHandler := True;
       end else
       if Parent.HandleAllocated then
         Parent.Repaint;
@@ -832,6 +887,7 @@ begin
     Split := X - FDownPos.X
   else
     Split := Y - FDownPos.Y;
+
   S := 0;
   case Align of
     alLeft:
@@ -851,10 +907,12 @@ begin
     NewSize := FMinSize
   else if S > FMaxSize then
     NewSize := FMaxSize;
-  if S <> NewSize then
+
+  if (S <> NewSize) and (ResizeStyle in [rsLine, rsPattern]) then
   begin
     if Align in [alRight, alBottom] then
-      S := S - NewSize else
+      S := S - NewSize
+    else
       S := NewSize - S;
     Inc(Split, S);
   end;
@@ -873,6 +931,20 @@ var
   {$endif}
 begin
   inherited;
+
+  if FSkipMoveHandler then
+  begin
+    // ≈сли приложение dpiAware и включено масштабирование в Windows (DPI > 96),
+    // то после применени€ WM_SETREDRAW (в обработчике UpdateControlSize)
+    // к форме (случай, когда Parent is TCustomForm)
+    // в WM_MOUSEMOVE почему-то прилетают кривые координаты, но только единожды.
+    // ѕропускаем логику один раз, затем возобновл€ем
+    // HINT: здесь нет дополнительных проверок на описанный случай, т.к. один раз пропустить
+    // обработчик после изменени€ размеров AlignControl'а не страшно: при любых обсто€тельствах
+    // WM_MOUSEMOVE вызываетс€ достаточно часто
+    FSkipMoveHandler := False;
+    Exit;
+  end;
 
   if FDraging then
   begin
@@ -1233,6 +1305,8 @@ begin
 end;
 
 procedure TdnSplitter.CheckHighlighted(Highlighted: Boolean);
+var
+  R: TRect;
 begin
   if FIsHighlighted <> Highlighted then
   begin
@@ -1252,7 +1326,9 @@ begin
         Perform(WM_SETCURSOR, Handle, HTCLIENT);
     end;
 
-    PaintButton;
+    //PaintButton;
+    R := GetButtonRect;
+    InvalidateRect(Handle, @R, False);
   end;
 end;
 
@@ -1475,8 +1551,7 @@ begin
       end;
     end;
 
-    Canvas.CopyRect(ButtonRect, OffscreenBmp.Canvas, Rect(0, 0,
-       OffscreenBmp.Width, OffscreenBmp.Height));
+    Canvas.CopyRect(ButtonRect, OffscreenBmp.Canvas, Rect(0, 0, OffscreenBmp.Width, OffscreenBmp.Height));
   finally
     OffscreenBmp.Free;
   end;
@@ -1704,10 +1779,11 @@ begin
     CheckHighlighted(False);
 end;
 
-procedure TdnSplitter.WMEraseBkgnd(var Message: TWmEraseBkgnd);
-begin
-  Message.Result := 1;
-end;
+//procedure TdnSplitter.WMEraseBkgnd(var Message: TWmEraseBkgnd);
+//begin
+//  inherited;
+//  //Message.Result := 1;
+//end;
 
 end.
 
